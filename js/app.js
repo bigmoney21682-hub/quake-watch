@@ -3,7 +3,7 @@
   'use strict';
   const $ = s => document.querySelector(s);
   const POLL_MS = 5 * QW.MIN;
-  const BUILD = '2026-11-23a';
+  const BUILD = '2026-11-23b';
   let rangeH = 24, charts = {}, busy = false, quakes = [];
 
   const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -210,7 +210,7 @@
       'Home Screen app: ' + (standalone ? 'yes' : 'no'),
       'Notifications API: ' + ('Notification' in self ? 'yes' : 'no'),
       'permission: ' + ('Notification' in self ? Notification.permission : 'n/a'),
-      'service worker: ' + (swReg?.active ? 'active' : 'none'),
+      'service worker: ' + (swReg?.active ? 'active' : swReg?.installing || swReg?.waiting ? 'installing' : 'none' + (swError ? ` (${swError})` : '')),
     ].join(' · ');
     $('#s-radius').value = st.radiusKm; $('#s-minmag').value = st.minMag;
     $('#s-thresh').value = st.anomalyThreshold; $('#s-station').value = st.magStation;
@@ -325,7 +325,7 @@
   };
 
   // ---------- Service worker, background sync, notifications ----------
-  let swReg = null;
+  let swReg = null, swError = '';
   async function registerPeriodic() {
     if (!swReg || !('periodicSync' in swReg)) return false;
     try {
@@ -373,9 +373,12 @@
 
   (async function init() {
     if ('serviceWorker' in navigator) {
-      try { swReg = await navigator.serviceWorker.register('sw.js'); await navigator.serviceWorker.ready; await registerPeriodic(); }
-      catch (err) { console.warn('SW registration failed', err); }
-    }
+      try {
+        swReg = await navigator.serviceWorker.register('sw.js');
+        await Promise.race([navigator.serviceWorker.ready, new Promise(r => setTimeout(r, 8000))]);
+        await registerPeriodic();
+      } catch (err) { swError = (err && (err.name + ': ' + err.message)) || String(err); console.warn('SW registration failed', err); }
+    } else swError = 'navigator.serviceWorker missing';
     await renderStatus(); await renderForecast(); await renderCharts();
     await refresh();
     setInterval(refresh, POLL_MS);
