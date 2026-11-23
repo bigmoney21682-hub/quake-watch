@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Quake Watch Florida</title>
+  <meta name="description" content="Experimental telluric and ionospheric anomaly monitor for Florida.">
+  <meta name="theme-color" content="#0f1216">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="vendor/uPlot.min.css">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><img src="icons/icon.svg" alt="" width="28" height="28"><span>Quake Watch <small>Florida</small></span></div>
+    <button id="refresh" class="icon-btn" title="Refresh now" aria-label="Refresh now">↻</button>
+  </header>
+
+  <main>
+    <!-- DASHBOARD -->
+    <section id="view-dash" class="view active">
+      <div class="card status" id="status">
+        <div class="status-row">
+          <div>
+            <div class="eyebrow">Precursor index</div>
+            <div class="big" id="idx">—</div>
+          </div>
+          <span class="pill" id="level">…</span>
+        </div>
+        <p class="reason" id="reason">Loading…</p>
+        <div class="chips" id="chips"></div>
+        <div class="meta" id="meta"></div>
+      </div>
+
+      <div class="ranges" role="tablist" id="ranges">
+        <button data-h="6">6h</button><button data-h="24" class="on">24h</button><button data-h="168">7d</button><button data-h="720">30d</button><button data-h="0">All</button>
+      </div>
+
+      <div class="card chart-card"><h2>Telluric currents <span class="hint">geoelectric field, FL grid · NOAA SWPC</span></h2><div class="chart" id="c-tell"></div></div>
+      <div class="card chart-card"><h2>Ionosphere <span class="hint">total electron content over FL · NOAA GloTEC</span></h2><div class="chart" id="c-iono"></div></div>
+      <div class="card chart-card"><h2>Geomagnetic field <span class="hint" id="mag-hint">USGS observatory, 1-min</span></h2><div class="chart" id="c-mag"></div></div>
+      <div class="card chart-card"><h2>ULF polarization Z/H <span class="hint">60-min rolling, derived</span></h2><div class="chart" id="c-ulf"></div></div>
+      <div class="card chart-card"><h2>Space weather <span class="hint">solar driver — rules out false alarms</span></h2><div class="chart" id="c-space"></div></div>
+      <div class="card chart-card"><h2>Precursor index history</h2><div class="chart" id="c-idx"></div></div>
+      <p class="legend-note">Red dashed lines mark earthquakes inside the watch radius.</p>
+    </section>
+
+    <!-- EVENTS -->
+    <section id="view-events" class="view">
+      <div class="card"><h2>Earthquakes near Florida <span class="hint" id="q-hint"></span></h2><ul class="list" id="quakes"></ul></div>
+      <div class="card"><h2>Alert log</h2><ul class="list" id="alerts"></ul></div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="view-settings" class="view">
+      <div class="card">
+        <h2>Alerts</h2>
+        <label class="row"><span>Notifications</span><input type="checkbox" id="s-notify"></label>
+        <label class="row"><span>Earthquake radius (km)</span><input type="number" id="s-radius" min="100" max="3000" step="50"></label>
+        <label class="row"><span>Notify at magnitude ≥</span><input type="number" id="s-minmag" min="1" max="8" step="0.1"></label>
+        <label class="row"><span>Elevated index threshold</span><input type="number" id="s-thresh" min="1" max="10" step="0.1"></label>
+        <label class="row"><span>Magnetometer</span>
+          <select id="s-station"><option value="BSL">BSL · Stennis, MS</option><option value="FRD">FRD · Fredericksburg, VA</option><option value="SJG">SJG · San Juan, PR</option></select>
+        </label>
+        <p class="small" id="bg-status"></p>
+      </div>
+      <div class="card">
+        <h2>History</h2>
+        <p class="small" id="db-stats"></p>
+        <div class="btns">
+          <button id="backfill">Backfill 24h of telluric + ionosphere (~40 MB)</button>
+          <button id="export-csv">Export CSV</button>
+          <button id="export-json">Export backup (JSON)</button>
+          <label class="btn">Import backup<input type="file" id="import" accept="application/json" hidden></label>
+          <button id="clear" class="danger">Clear all history</button>
+        </div>
+        <p class="small" id="backfill-status"></p>
+      </div>
+      <div class="card about">
+        <h2>About this monitor</h2>
+        <p>Inspired by Eric Dollard's view of the Earth as an electrical system — telluric earth currents in the crust, the ionosphere as the upper plate of a planetary capacitor — this app watches those signals over Florida and flags when they deviate from their own recent baseline.</p>
+        <p><b>How the index works.</b> Each local signal (telluric |E|, TEC anomaly, ULF Z/H ratio) is scored as a robust z-score against its trailing 7 days. The index is the RMS of those scores. If Kp ≥ 5 or Dst ≤ −50 nT, the sun is driving the disturbance and the alert is downgraded to "storm".</p>
+        <p><b>Honest caveat.</b> No precursor method — telluric, ionospheric or otherwise — has yet shown reliable, repeatable earthquake prediction, and Florida is one of the least seismically active places in the U.S. Treat this as an experiment: the logged history and the USGS quake overlay let you judge for yourself whether anomalies ever line up with real events. Never use it for safety decisions.</p>
+        <p class="small">Data: NOAA SWPC (geoelectric field model, GloTEC, Kp, Dst, DSCOVR/ACE solar wind), USGS Geomagnetism Program, USGS Earthquake Hazards Program. The telluric values are NOAA's modeled geoelectric field (driven by real magnetometer data), not direct electrode measurements.</p>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabs">
+    <button data-view="dash" class="on">Monitor</button>
+    <button data-view="events">Events</button>
+    <button data-view="settings">Settings</button>
+  </nav>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="vendor/uPlot.iife.min.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
