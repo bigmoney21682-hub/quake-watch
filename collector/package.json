@@ -1,0 +1,8 @@
+{
+  "name": "quake-watch-collector",
+  "private": true,
+  "type": "module",
+  "description": "Runs Quake Watch's core.js on a schedule and pushes alerts to ntfy.",
+  "scripts": { "start": "node run.mjs" },
+  "dependencies": { "fake-indexeddb": "6.0.0" }
+}

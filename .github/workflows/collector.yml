@@ -1,0 +1,53 @@
+# Runs the Quake Watch collector in the cloud and pushes alerts to ntfy, so an iPhone
+# gets notified even when the app is closed. History is kept between runs in the Actions cache.
+name: Background alerts
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # GitHub may delay scheduled runs by several minutes
+  workflow_dispatch:
+    inputs:
+      test:
+        description: 'Only send a test notification'
+        type: boolean
+        default: false
+
+concurrency:
+  group: collector
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: collector/package-lock.json
+      - run: npm ci --omit=dev
+        working-directory: collector
+      - name: Restore history
+        uses: actions/cache/restore@v4
+        with:
+          path: collector/state
+          key: qw-state-${{ github.run_id }}
+          restore-keys: qw-state-
+      - name: Collect and alert
+        working-directory: collector
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          APP_URL: https://bigmoney21682-hub.github.io/quake-watch/
+          QW_SETTINGS: ${{ vars.QW_SETTINGS }}
+        run: node run.mjs ${{ inputs.test && '--test' || '' }}
+      - name: Save history
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: collector/state
+          key: qw-state-${{ github.run_id }}-${{ github.run_attempt }}

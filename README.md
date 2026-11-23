@@ -28,6 +28,16 @@ Two things open a **forecast window** (default: M2.5+ within 800 km in the next 
 
 Each forecast sends a notification, is logged, and is scored automatically against USGS as a **hit** or **miss**. The Events tab compares the hit rate with the chance of a quake by luck alone, a Poisson estimate from the last 5 years of USGS counts (about 14% per 7-day window at the default settings). The method only earns trust if it beats that rate over many forecasts.
 
+## Background alerts on iPhone (ntfy)
+
+iOS gives Home Screen apps no background time, so a GitHub Actions workflow (`.github/workflows/collector.yml`) runs the same `js/core.js` every 15 minutes in Node (`collector/run.mjs`) and pushes each alert to an [ntfy](https://ntfy.sh) topic. History is carried between runs in the Actions cache.
+
+1. Install the **ntfy** app on the phone and subscribe to the topic stored in the repo secret `NTFY_TOPIC`. Anyone who knows the topic name can read it, so keep it unguessable.
+2. Send a test from Actions → Background alerts → Run workflow → tick *Only send a test notification*.
+3. Optional: change thresholds with a repo variable `QW_SETTINGS`, e.g. `{"forecastMag":3,"radiusKm":1000}`.
+
+GitHub turns off scheduled workflows in a public repo after 60 days without commits. Re-enable it from the Actions tab if that happens.
+
 ## Run locally
 
 ```sh
