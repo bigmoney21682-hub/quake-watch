@@ -202,6 +202,7 @@
   async function renderSettings() {
     const st = await QW.settings();
     $('#s-notify').checked = st.notify && 'Notification' in self && Notification.permission === 'granted';
+    $('#notify-help').textContent = notifyHelp();
     $('#s-radius').value = st.radiusKm; $('#s-minmag').value = st.minMag;
     $('#s-thresh').value = st.anomalyThreshold; $('#s-station').value = st.magStation;
     $('#s-fdays').value = st.forecastDays; $('#s-fmag').value = st.forecastMag; $('#s-stream').value = st.streamUrl;
@@ -216,18 +217,50 @@
   $('#s-minmag').onchange = e => saveSetting('minMag', +e.target.value);
   $('#s-fdays').onchange = e => saveSetting('forecastDays', +e.target.value);
   $('#s-fmag').onchange = e => saveSetting('forecastMag', +e.target.value);
-  $('#s-stream').onchange = e => saveSetting('streamUrl', e.target.value.trim()).then(renderForecast);
+  $('#s-stream').onchange = e => {
+    const v = e.target.value.trim() || QW.DEFAULTS.streamUrl;
+    e.target.value = v;
+    saveSetting('streamUrl', v).then(renderForecast);
+  };
   $('#s-thresh').onchange = e => saveSetting('anomalyThreshold', +e.target.value).then(() => renderStatus());
   $('#s-station').onchange = e => saveSetting('magStation', e.target.value).then(() => QW.setMeta('geo.last', 0)).then(() => refresh());
-  $('#s-notify').onchange = async e => {
-    if (e.target.checked) {
-      if (!('Notification' in self)) { toast('This browser does not support notifications. On iPhone, add to Home Screen first.'); e.target.checked = false; return; }
-      const p = await Notification.requestPermission();
-      if (p !== 'granted') { toast('Notification permission denied.'); e.target.checked = false; return; }
+  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  function notifyHelp() {
+    if (!('Notification' in self))
+      return isIOS && !standalone ? 'On iPhone, notifications only work from the Home Screen app: Share → Add to Home Screen, then open it from there.'
+        : 'This browser does not support notifications.';
+    if (Notification.permission === 'denied')
+      return isIOS ? 'Notifications are blocked. On iPhone open Settings → Notifications → Quake Watch → Allow Notifications. If it isn\'t listed, delete the app from the Home Screen, add it again, and tap the switch here.'
+        : 'Notifications are blocked for this site. Allow them in the browser\'s site settings, then try again.';
+    return '';
+  }
+  // iOS only shows the permission prompt when requestPermission() runs directly inside a tap,
+  // so ask first thing in the click handler, before any other await.
+  $('#s-notify').onclick = async e => {
+    const on = e.target.checked;
+    if (on) {
+      let p = 'Notification' in self ? Notification.permission : 'unsupported';
+      if (p === 'default') p = await Notification.requestPermission();
+      if (p !== 'granted') {
+        e.target.checked = false;
+        const help = notifyHelp() || 'Permission was not granted. Tap the switch again and choose Allow.';
+        $('#notify-help').textContent = help; toast(help);
+        await saveSetting('notify', false);
+        return;
+      }
+      $('#notify-help').textContent = '';
       await registerPeriodic();
     }
-    await saveSetting('notify', e.target.checked);
+    await saveSetting('notify', on);
     $('#bg-status').textContent = await bgStatus();
+  };
+  $('#test-notify').onclick = async () => {
+    if (!('Notification' in self) || Notification.permission !== 'granted') { toast(notifyHelp() || 'Turn notifications on first.'); return; }
+    const reg = swReg || await navigator.serviceWorker?.ready;
+    const a = { title: 'Quake Watch test', body: 'Notifications are working.', kind: 'test' };
+    if (reg) await reg.showNotification(a.title, { body: a.body, icon: 'icons/icon-192.png', tag: 'test' });
+    else new Notification(a.title, { body: a.body });
   };
 
   function download(name, text, type) {
@@ -295,13 +328,14 @@
       if (tags.includes('collect')) return 'Background checks enabled (the browser picks the cadence, typically every few hours).';
       return 'Install the app to your home screen to enable background checks.';
     }
+    if (isIOS) return 'iPhone only checks while the app is open. iOS gives Home Screen apps no background time, so alerts appear only while the app is open or was used recently.';
     return 'This browser only collects while the app is open. Keep it open (or in a tab) for continuous logging.';
   }
   async function notify(alerts) {
     const st = await QW.settings();
     if (!st.notify || !('Notification' in self) || Notification.permission !== 'granted') return;
     for (const a of alerts) {
-      if (swReg) swReg.active?.postMessage({ type: 'notify', alert: a });
+      if (swReg) await swReg.showNotification(a.title, { body: a.body, icon: 'icons/icon-192.png', tag: a.ref || a.kind, data: { url: './' } });
       else new Notification(a.title, { body: a.body });
     }
   }

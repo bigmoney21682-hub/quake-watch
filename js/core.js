@@ -15,7 +15,7 @@
     magStation: 'BSL',      // Stennis Space Center, MS — closest USGS observatory to Florida
     forecastDays: 7,        // a precursor alert predicts a quake within this many days…
     forecastMag: 2.5,       // …at or above this magnitude, inside radiusKm
-    streamUrl: '',          // optional live earth-signal audio stream (e.g. EPD Laboratories)
+    streamUrl: 'https://hakasays.com:3448/EPDAntennaField.mp3', // EPD Laboratories long-line antenna, Tonopah NV (Icecast)
   };
   const SWPC = 'https://services.swpc.noaa.gov';
   const DAY = 864e5, HOUR = 36e5, MIN = 6e4;
