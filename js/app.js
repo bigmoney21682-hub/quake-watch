@@ -244,6 +244,8 @@
         return 'This copy is running inside Safari, not as a Home Screen web app. Delete the Home Screen icon. In Safari, tap Share → Add to Home Screen, and make sure "Open as Web App" is ON. Then open it from the new icon.';
       return 'This browser does not expose notifications to this page.';
     }
+    if (isIOS && !('serviceWorker' in navigator))
+      return 'iOS has disabled service workers on this iPhone, and web-app notifications can\'t work without them. Usual causes: Screen Time → Content & Privacy Restrictions → App Store, Media, Web & Games → Web Content set to "Limit Adult Websites"; Lockdown Mode; or the Service Workers feature flag in Safari → Advanced. Background alerts still arrive through ntfy.';
     if (Notification.permission === 'denied')
       return isIOS ? 'Notifications are blocked. On iPhone open Settings → Notifications → Quake Watch → Allow Notifications. If it isn\'t listed, delete the app from the Home Screen, add it again, and tap the switch here.'
         : 'Notifications are blocked for this site. Allow them in the browser\'s site settings, then try again.';
