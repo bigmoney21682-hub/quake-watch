@@ -3,6 +3,7 @@
   'use strict';
   const $ = s => document.querySelector(s);
   const POLL_MS = 5 * QW.MIN;
+  const BUILD = '2026-11-23a';
   let rangeH = 24, charts = {}, busy = false, quakes = [];
 
   const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -203,6 +204,14 @@
     const st = await QW.settings();
     $('#s-notify').checked = st.notify && 'Notification' in self && Notification.permission === 'granted';
     $('#notify-help').textContent = notifyHelp();
+    $('#diag').textContent = [
+      'Build ' + BUILD,
+      isIOS ? 'iOS ' + (iosVer.join('.') || '?') : navigator.platform,
+      'Home Screen app: ' + (standalone ? 'yes' : 'no'),
+      'Notifications API: ' + ('Notification' in self ? 'yes' : 'no'),
+      'permission: ' + ('Notification' in self ? Notification.permission : 'n/a'),
+      'service worker: ' + (swReg?.active ? 'active' : 'none'),
+    ].join(' · ');
     $('#s-radius').value = st.radiusKm; $('#s-minmag').value = st.minMag;
     $('#s-thresh').value = st.anomalyThreshold; $('#s-station').value = st.magStation;
     $('#s-fdays').value = st.forecastDays; $('#s-fmag').value = st.forecastMag; $('#s-stream').value = st.streamUrl;
@@ -226,10 +235,15 @@
   $('#s-station').onchange = e => saveSetting('magStation', e.target.value).then(() => QW.setMeta('geo.last', 0)).then(() => refresh());
   const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const iosVer = (navigator.userAgent.match(/OS (\d+)_(\d+)/) || []).slice(1).map(Number);
   function notifyHelp() {
-    if (!('Notification' in self))
-      return isIOS && !standalone ? 'On iPhone, notifications only work from the Home Screen app: Share → Add to Home Screen, then open it from there.'
-        : 'This browser does not support notifications.';
+    if (!('Notification' in self)) {
+      if (isIOS && iosVer.length && (iosVer[0] < 16 || (iosVer[0] === 16 && iosVer[1] < 4)))
+        return `This iPhone runs iOS ${iosVer.join('.')}, and web-app notifications need iOS 16.4 or newer. Update iOS, or rely on the ntfy alerts.`;
+      if (isIOS && !standalone)
+        return 'This copy is running inside Safari, not as a Home Screen web app. Delete the Home Screen icon. In Safari, tap Share → Add to Home Screen, and make sure "Open as Web App" is ON. Then open it from the new icon.';
+      return 'This browser does not expose notifications to this page.';
+    }
     if (Notification.permission === 'denied')
       return isIOS ? 'Notifications are blocked. On iPhone open Settings → Notifications → Quake Watch → Allow Notifications. If it isn\'t listed, delete the app from the Home Screen, add it again, and tap the switch here.'
         : 'Notifications are blocked for this site. Allow them in the browser\'s site settings, then try again.';
