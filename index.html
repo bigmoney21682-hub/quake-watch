@@ -36,6 +36,13 @@
         <div class="meta" id="meta"></div>
       </div>
 
+      <div class="card forecast" id="forecast"></div>
+
+      <div class="card">
+        <h2>Earth signal <span class="hint">live audio stream</span></h2>
+        <div id="stream"></div>
+      </div>
+
       <div class="ranges" role="tablist" id="ranges">
         <button data-h="6">6h</button><button data-h="24" class="on">24h</button><button data-h="168">7d</button><button data-h="720">30d</button><button data-h="0">All</button>
       </div>
@@ -44,6 +51,7 @@
       <div class="card chart-card"><h2>Ionosphere <span class="hint">total electron content over FL · NOAA GloTEC</span></h2><div class="chart" id="c-iono"></div></div>
       <div class="card chart-card"><h2>Geomagnetic field <span class="hint" id="mag-hint">USGS observatory, 1-min</span></h2><div class="chart" id="c-mag"></div></div>
       <div class="card chart-card"><h2>ULF polarization Z/H <span class="hint">60-min rolling, derived</span></h2><div class="chart" id="c-ulf"></div></div>
+      <div class="card chart-card"><h2>Sun <span class="hint">GOES X-ray flux (log) + 10.7 cm solar flux · NOAA</span></h2><div class="chart" id="c-sun"></div></div>
       <div class="card chart-card"><h2>Space weather <span class="hint">solar driver — rules out false alarms</span></h2><div class="chart" id="c-space"></div></div>
       <div class="card chart-card"><h2>Precursor index history</h2><div class="chart" id="c-idx"></div></div>
       <p class="legend-note">Red dashed lines mark earthquakes inside the watch radius.</p>
@@ -51,6 +59,7 @@
 
     <!-- EVENTS -->
     <section id="view-events" class="view">
+      <div class="card"><h2>Forecast scorecard <span class="hint">does it beat chance?</span></h2><div id="score"></div><ul class="list" id="forecasts"></ul></div>
       <div class="card"><h2>Earthquakes near Florida <span class="hint" id="q-hint"></span></h2><ul class="list" id="quakes"></ul></div>
       <div class="card"><h2>Alert log</h2><ul class="list" id="alerts"></ul></div>
     </section>
@@ -69,6 +78,14 @@
         <p class="small" id="bg-status"></p>
       </div>
       <div class="card">
+        <h2>Forecasts</h2>
+        <label class="row"><span>Forecast window (days)</span><input type="number" id="s-fdays" min="1" max="60" step="1"></label>
+        <label class="row"><span>Forecast magnitude ≥</span><input type="number" id="s-fmag" min="1" max="8" step="0.1"></label>
+        <p class="small">An elevated precursor index, or solar and seismic activity rising together, opens a forecast window. It's scored as a hit if a quake of this size lands inside the radius before the window closes. Otherwise it's a miss.</p>
+        <label class="row"><span>Earth-signal stream URL</span><input type="url" id="s-stream" placeholder="https://…" class="wide"></label>
+        <p class="small">Paste the direct audio stream link from EPD Laboratories (<a href="https://ericpdollard.com" target="_blank" rel="noopener">ericpdollard.com</a>) or any other ELF/VLF receiver.</p>
+      </div>
+      <div class="card">
         <h2>History</h2>
         <p class="small" id="db-stats"></p>
         <div class="btns">
@@ -84,6 +101,7 @@
         <h2>About this monitor</h2>
         <p>Inspired by Eric Dollard's view of the Earth as an electrical system — telluric earth currents in the crust, the ionosphere as the upper plate of a planetary capacitor — this app watches those signals over Florida and flags when they deviate from their own recent baseline.</p>
         <p><b>How the index works.</b> Each local signal (telluric |E|, TEC anomaly, ULF Z/H ratio) is scored as a robust z-score against its trailing 7 days. The index is the RMS of those scores. If Kp ≥ 5 or Dst ≤ −50 nT, the sun is driving the disturbance and the alert is downgraded to "storm".</p>
+        <p><b>Forecasts.</b> Every alert is written down as a testable prediction (magnitude, radius, time window) and scored automatically against USGS. The scorecard compares the hit rate with the chance of a quake turning up by luck alone, which is about 14% per 7-day window for M2.5+ within 800 km of central Florida. A method that really predicts quakes has to beat that number over many alerts.</p>
         <p><b>Honest caveat.</b> No precursor method — telluric, ionospheric or otherwise — has yet shown reliable, repeatable earthquake prediction, and Florida is one of the least seismically active places in the U.S. Treat this as an experiment: the logged history and the USGS quake overlay let you judge for yourself whether anomalies ever line up with real events. Never use it for safety decisions.</p>
         <p class="small">Data: NOAA SWPC (geoelectric field model, GloTEC, Kp, Dst, DSCOVR/ACE solar wind), USGS Geomagnetism Program, USGS Earthquake Hazards Program. The telluric values are NOAA's modeled geoelectric field (driven by real magnetometer data), not direct electrode measurements.</p>
       </div>

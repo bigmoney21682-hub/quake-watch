@@ -13,6 +13,9 @@
     anomalyThreshold: 3,    // composite robust z-score that raises an "Elevated" alert
     notify: true,
     magStation: 'BSL',      // Stennis Space Center, MS — closest USGS observatory to Florida
+    forecastDays: 7,        // a precursor alert predicts a quake within this many days…
+    forecastMag: 2.5,       // …at or above this magnitude, inside radiusKm
+    streamUrl: '',          // optional live earth-signal audio stream (e.g. EPD Laboratories)
   };
   const SWPC = 'https://services.swpc.noaa.gov';
   const DAY = 864e5, HOUR = 36e5, MIN = 6e4;
@@ -32,6 +35,15 @@
     'sw.Dst':   { label: 'Dst ring current', unit: 'nT', group: 'space' },
     'sw.speed': { label: 'Solar wind speed', unit: 'km/s', group: 'space' },
     'sw.Bz':    { label: 'IMF Bz (GSM)', unit: 'nT', group: 'space' },
+    'sw.Ap':    { label: 'Running a-index', unit: '', group: 'space' },
+    'sun.F107': { label: 'Solar flux F10.7', unit: 'sfu', group: 'sun' },
+    'sun.Xray': { label: 'GOES X-ray 0.1–0.8 nm', unit: 'W/m²', group: 'sun' },
+  };
+  // GOES flare class from 0.1–0.8 nm flux.
+  QW.xrayClass = f => {
+    if (!(f > 0)) return '—';
+    const [c, b] = f >= 1e-4 ? ['X', 1e-4] : f >= 1e-5 ? ['M', 1e-5] : f >= 1e-6 ? ['C', 1e-6] : f >= 1e-7 ? ['B', 1e-7] : ['A', 1e-8];
+    return c + (f / b).toFixed(1);
   };
 
   // ---------- IndexedDB ----------
@@ -39,15 +51,24 @@
   QW.db = function () {
     if (dbp) return dbp;
     dbp = new Promise((res, rej) => {
-      const r = indexedDB.open('quake-watch', 1);
-      r.onupgradeneeded = () => {
+      const r = indexedDB.open('quake-watch', 2);
+      r.onupgradeneeded = e => {
         const d = r.result;
-        d.createObjectStore('samples', { keyPath: ['s', 't'] });
-        d.createObjectStore('quakes', { keyPath: 'id' }).createIndex('t', 't');
-        d.createObjectStore('alerts', { keyPath: 'id', autoIncrement: true }).createIndex('t', 't');
-        d.createObjectStore('meta');
+        if (e.oldVersion < 1) {
+          d.createObjectStore('samples', { keyPath: ['s', 't'] });
+          d.createObjectStore('quakes', { keyPath: 'id' }).createIndex('t', 't');
+          d.createObjectStore('alerts', { keyPath: 'id', autoIncrement: true }).createIndex('t', 't');
+          d.createObjectStore('meta');
+        }
+        if (e.oldVersion < 2) d.createObjectStore('forecasts', { keyPath: 'id', autoIncrement: true });
       };
-      r.onsuccess = () => res(r.result);
+      r.onsuccess = () => {
+        const d = r.result;
+        // Let a newer app version (another tab or the service worker) upgrade the schema.
+        d.onversionchange = () => { d.close(); dbp = null; };
+        res(d);
+      };
+      r.onblocked = () => console.warn('Quake Watch DB upgrade waiting: close other open copies of the app.');
       r.onerror = () => rej(r.error);
     });
     return dbp;
@@ -73,9 +94,12 @@
   QW.getQuakes = () => tx('quakes', 'readonly', st => st.getAll()).then(a => a.sort((x, y) => y.t - x.t));
   QW.addAlert = a => tx('alerts', 'readwrite', st => st.add(Object.assign({ t: Date.now() }, a)));
   QW.getAlerts = () => tx('alerts', 'readonly', st => st.getAll()).then(a => a.sort((x, y) => y.t - x.t));
+  QW.addForecast = f => tx('forecasts', 'readwrite', st => st.add(f));
+  QW.putForecast = f => tx('forecasts', 'readwrite', st => st.put(f));
+  QW.getForecasts = () => tx('forecasts', 'readonly', st => st.getAll()).then(a => a.sort((x, y) => y.t - x.t));
   QW.clearAll = async () => {
-    await Promise.all(['samples', 'quakes', 'alerts'].map(s => tx(s, 'readwrite', st => st.clear())));
-    for (const k of ['geo.last', 'iono.last', 'initialized', 'lastLevel', 'lastCollect']) await tx('meta', 'readwrite', st => st.delete(k));
+    await Promise.all(['samples', 'quakes', 'alerts', 'forecasts'].map(s => tx(s, 'readwrite', st => st.clear())));
+    for (const k of ['geo.last', 'iono.last', 'initialized', 'lastLevel', 'lastCoincidence', 'lastCollect']) await tx('meta', 'readwrite', st => st.delete(k));
   };
 
   // ---------- Fetch helpers ----------
@@ -87,6 +111,11 @@
   const ts = s => Date.parse(/Z$|[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z');
   const inFL = ([lon, lat]) => { const b = QW.FL.bbox; return lon >= b.w && lon <= b.e && lat >= b.s && lat <= b.n; };
   const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+  QW.distKm = q => { // great-circle distance from central Florida
+    const R = Math.PI / 180, dLat = (q.lat - QW.FL.lat) * R, dLon = (q.lon - QW.FL.lon) * R;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(QW.FL.lat * R) * Math.cos(q.lat * R) * Math.sin(dLon / 2) ** 2;
+    return 12742 * Math.asin(Math.sqrt(h));
+  };
 
   // ---------- Sources ----------
   // 1. Telluric: NOAA SWPC modeled geoelectric field (1-min), averaged over Florida grid points.
@@ -145,13 +174,20 @@
 
   // 4. Space-weather context: separates sun-driven disturbances from local ones.
   QW.fetchSpace = async () => {
-    const [kp, dst, wind, mag] = await Promise.allSettled([
+    const [kp, dst, wind, mag, f107, xray] = await Promise.allSettled([
       getJSON(`${SWPC}/products/noaa-planetary-k-index.json`),
       getJSON(`${SWPC}/products/kyoto-dst.json`),
       getJSON(`${SWPC}/json/rtsw/rtsw_wind_1m.json`),
       getJSON(`${SWPC}/json/rtsw/rtsw_mag_1m.json`),
+      getJSON(`${SWPC}/json/f107_cm_flux.json`),
+      getJSON(`${SWPC}/json/goes/primary/xrays-1-day.json`),
     ]);
-    if (kp.value) await QW.putSamples('sw.Kp', kp.value.map(r => [ts(r.time_tag), +r.Kp]));
+    if (kp.value) {
+      await QW.putSamples('sw.Kp', kp.value.map(r => [ts(r.time_tag), +r.Kp]));
+      await QW.putSamples('sw.Ap', kp.value.map(r => [ts(r.time_tag), +r.a_running]));
+    }
+    if (f107.value) await QW.putSamples('sun.F107', f107.value.filter(r => r.frequency === 2800 && r.flux > 0).map(r => [ts(r.time_tag), +r.flux]));
+    if (xray.value) await QW.putSamples('sun.Xray', xray.value.filter(r => r.energy === '0.1-0.8nm' && r.flux > 0).map(r => [ts(r.time_tag), r.flux]));
     if (dst.value) await QW.putSamples('sw.Dst', dst.value.map(r => [ts(r.time_tag), +r.dst]));
     if (wind.value) await QW.putSamples('sw.speed', wind.value.filter(r => r.active).map(r => [ts(r.time_tag), r.proton_speed]));
     if (mag.value) await QW.putSamples('sw.Bz', mag.value.filter(r => r.active).map(r => [ts(r.time_tag), r.bz_gsm]));
@@ -169,6 +205,21 @@
     await QW.putQuakes(qs);
     return qs.filter(q => !known.has(q.id));
   };
+
+  // Base rate: how often a qualifying quake happens anyway (USGS, last 5 years), cached for a week.
+  // A forecast method only means something if its hit rate beats this.
+  QW.baseRate = async (st) => {
+    const key = `base:${st.radiusKm}:${st.forecastMag}`, c = await QW.getMeta(key);
+    if (c && Date.now() - c.t < 7 * DAY) return c;
+    const start = new Date(Date.now() - 5 * 365 * DAY).toISOString().slice(0, 10);
+    const r = await fetch(`https://earthquake.usgs.gov/fdsnws/event/1/count?latitude=${QW.FL.lat}&longitude=${QW.FL.lon}&maxradiuskm=${st.radiusKm}&minmagnitude=${st.forecastMag}&starttime=${start}`);
+    if (!r.ok) throw new Error(r.status + ' base rate');
+    const n = +(await r.text());
+    const out = { t: Date.now(), n, perDay: n / (5 * 365) };
+    await QW.setMeta(key, out);
+    return out;
+  };
+  QW.chance = (perDay, days) => 1 - Math.exp(-perDay * days); // Poisson P(≥1 quake in window)
 
   // One-time / on-demand backfill of the heavy gridded products (≈1–2.5 MB per file).
   QW.backfill = async (onProgress = () => {}) => {
@@ -245,7 +296,25 @@
         storm: 'Signals disturbed, but a geomagnetic storm is in progress — likely solar-driven, not local.',
       }[level];
     }
-    return { scores, index, storm, kp: kp && kp[1], dst: dst && dst[1], level, reason, t: now };
+    // Dollard-style coincidence: solar input rising while local seismic reports rise.
+    const f107 = await QW.getSeries('sun.F107', now - 30 * DAY);
+    const xr = (await QW.getSeries('sun.Xray', now - DAY)).map(p => p[1]);
+    const xmax = xr.length ? Math.max(...xr) : null;
+    const fNow = f107.length ? f107[f107.length - 1][1] : null;
+    const fMed = f107.length >= 5 ? median(f107.map(p => p[1])) : null;
+    const solarWhy = [];
+    if (xmax != null && xmax >= 1e-5) solarWhy.push(`${QW.xrayClass(xmax)} flare in 24 h`);
+    if (fNow != null && fMed && fNow >= fMed * 1.2) solarWhy.push(`F10.7 ${fNow.toFixed(0)} (+${Math.round((fNow / fMed - 1) * 100)}% vs 30-d median)`);
+    if (kp && kp[1] >= 5) solarWhy.push(`Kp ${kp[1].toFixed(1)}`);
+    const qs = (await QW.getQuakes()).filter(q => q.t > now - 30 * DAY && q.mag >= st.minMag);
+    const q3 = qs.filter(q => q.t > now - 3 * DAY).length;
+    const expected3 = (qs.length / 30) * 3;
+    const seismicRising = q3 >= 2 && q3 >= 2 * Math.max(expected3, 0.5);
+    const coincidence = solarWhy.length > 0 && seismicRising
+      ? `${solarWhy.join(', ')} + ${q3} quakes (M≥${st.minMag}) in 3 days vs ~${expected3.toFixed(1)} expected` : null;
+    const ap = (await QW.getSeries('sw.Ap', now - DAY)).pop();
+    return { scores, index, storm, kp: kp && kp[1], dst: dst && dst[1], ap: ap && ap[1], f107: fNow, xray: xr.length ? xr[xr.length - 1] : null,
+      xmax, solarWhy, q3, expected3, coincidence, level, reason, t: now };
   };
 
   // ---------- Full collection cycle ----------
@@ -274,9 +343,44 @@
         alerts.push({ kind: 'quake', title: `M${q.mag.toFixed(1)} earthquake`, body: q.place, ref: q.id });
     }
     const prev = await QW.getMeta('lastLevel', 'baseline');
-    if (a.level === 'elevated' && prev !== 'elevated')
+    const prevCo = await QW.getMeta('lastCoincidence', false);
+    const fcs = await QW.getForecasts();
+    let open = fcs.find(f => f.status === 'open');
+    const issue = async (trigger, detail) => {
+      if (open) return; // one forecast window at a time, so each one is scored independently
+      const f = { t: Date.now(), until: Date.now() + st.forecastDays * DAY, mag: st.forecastMag, radiusKm: st.radiusKm,
+        trigger, detail, index: a.index, status: 'open' };
+      try { f.baseChance = QW.chance((await QW.baseRate(st)).perDay, st.forecastDays); } catch {}
+      f.id = await QW.addForecast(f); open = f;
+      alerts.push({ kind: 'forecast', title: `Forecast: M${st.forecastMag}+ within ${st.radiusKm} km in ${st.forecastDays} days`,
+        body: `${detail}` + (f.baseChance != null ? ` · chance by luck alone ≈ ${Math.round(f.baseChance * 100)}%` : '') });
+    };
+    if (a.level === 'elevated' && prev !== 'elevated') {
       alerts.push({ kind: 'anomaly', title: 'Precursor index elevated', body: `Index ${a.index.toFixed(2)} — ${a.reason}` });
+      await issue('telluric/ionospheric anomaly', `Index ${a.index.toFixed(2)}: ` + Object.entries(a.scores)
+        .filter(([, s]) => s.z != null && Math.abs(s.z) >= 2).map(([k, s]) => `${k} z${s.z >= 0 ? '+' : ''}${s.z.toFixed(1)}`).join(', '));
+    }
+    if (a.coincidence && !prevCo) {
+      alerts.push({ kind: 'coincidence', title: 'Solar + seismic activity rising together', body: a.coincidence });
+      await issue('solar/seismic coincidence', a.coincidence);
+    }
     await QW.setMeta('lastLevel', a.level);
+    await QW.setMeta('lastCoincidence', !!a.coincidence);
+
+    // Score forecasts against what actually happened.
+    const allQ = await QW.getQuakes();
+    for (const f of await QW.getForecasts()) {
+      if (f.status !== 'open') continue;
+      const hit = allQ.filter(q => q.t >= f.t && q.t <= f.until && q.mag >= f.mag && QW.distKm(q) <= f.radiusKm).sort((x, y) => x.t - y.t)[0];
+      if (hit) {
+        Object.assign(f, { status: 'hit', quake: { id: hit.id, mag: hit.mag, place: hit.place, t: hit.t }, lead: hit.t - f.t });
+        alerts.push({ kind: 'verify', title: 'Forecast HIT', body: `M${hit.mag.toFixed(1)} ${hit.place} — ${((hit.t - f.t) / DAY).toFixed(1)} days after the alert` });
+      } else if (Date.now() > f.until) {
+        f.status = 'miss';
+        alerts.push({ kind: 'verify', title: 'Forecast window closed: miss', body: `No M${f.mag}+ within ${f.radiusKm} km in ${Math.round((f.until - f.t) / DAY)} days` });
+      } else continue;
+      await QW.putForecast(f);
+    }
     for (const al of alerts) await QW.addAlert(al);
     await QW.setMeta('lastCollect', Date.now());
     return { analysis: a, alerts, errors, newQuakes };

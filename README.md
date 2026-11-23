@@ -11,11 +11,22 @@ An installable PWA that logs telluric, ionospheric and geomagnetic signals over 
 | Geomagnetic H, Z | USGS Geomagnetism, BSL (Stennis, MS) by default | 1 min |
 | ULF Z/H polarization ratio | derived from H, Z (60-min rolling std of 1-min diffs) | 30 min |
 | Kp, Dst, solar wind speed, IMF Bz | NOAA SWPC | 1 min to 3 h |
+| Solar flux F10.7, GOES X-ray (flare class), running a-index | NOAA SWPC | 1 min to daily |
+| Earth-signal audio (optional, e.g. EPD Laboratories ELF/VLF) | URL you paste into Settings | live |
 | Earthquakes within radius of central FL | USGS FDSN event API | live |
 
 ## How the index works
 
 Each local signal (telluric |E|, TEC anomaly, Z/H ratio) gets a robust z-score (median/MAD) against its trailing 7 days. The **precursor index** is the RMS of those z-scores. When Kp ≥ 5 or Dst ≤ −50 nT the level becomes `storm`, because the sun is driving the disturbance and it isn't a local signal. Levels: `baseline` (not enough history) → `quiet` → `watch` (≥ ⅔ threshold) → `elevated` (≥ threshold, default 3; sends a notification).
+
+## Forecasts and scoring
+
+Two things open a **forecast window** (default: M2.5+ within 800 km in the next 7 days):
+
+1. The precursor index turns `elevated`, meaning the telluric, ionospheric and ULF signals have all moved off their baselines while space weather is quiet.
+2. A solar/seismic coincidence: solar input is rising (an M-class flare or larger in 24 h, F10.7 ≥ 20% above its 30-day median, or Kp ≥ 5) while quakes inside the radius run at ≥ 2× their 30-day rate.
+
+Each forecast sends a notification, is logged, and is scored automatically against USGS as a **hit** or **miss**. The Events tab compares the hit rate with the chance of a quake by luck alone, a Poisson estimate from the last 5 years of USGS counts (about 14% per 7-day window at the default settings). The method only earns trust if it beats that rate over many forecasts.
 
 ## Run locally
 

@@ -39,9 +39,57 @@
     const last = await QW.getMeta('lastCollect', 0);
     $('#meta').textContent = [
       a.kp != null ? `Kp ${a.kp.toFixed(1)}` : null,
+      a.ap != null ? `a ${a.ap}` : null,
       a.dst != null ? `Dst ${a.dst} nT` : null,
+      a.f107 != null ? `F10.7 ${a.f107.toFixed(0)} sfu` : null,
+      a.xray != null ? `X-ray ${QW.xrayClass(a.xray)}` : null,
+      `quakes 3 d: ${a.q3} (≈${a.expected3.toFixed(1)} usual)`,
       last ? `updated ${ago(last)}` : 'not yet updated',
     ].filter(Boolean).join(' · ');
+  }
+
+  // ---------- Forecast + stream ----------
+  async function renderForecast() {
+    const st = await QW.settings();
+    const open = (await QW.getForecasts()).find(f => f.status === 'open');
+    const a = await QW.analyze();
+    let html = '<h2>Forecast</h2>';
+    if (open) {
+      const left = Math.max(0, (open.until - Date.now()) / QW.DAY);
+      html += `<p><b>Active:</b> M${open.mag}+ within ${open.radiusKm} km by ${fmtT(open.until)} <span class="small">(${left.toFixed(1)} days left)</span></p>
+        <p class="small">Trigger: ${open.trigger} · ${open.detail}${open.baseChance != null ? ` · chance by luck alone ≈ ${Math.round(open.baseChance * 100)}%` : ''}</p>`;
+    } else {
+      html += `<p class="small">No active forecast. One opens when the precursor index goes elevated, or when solar activity and local seismic reports rise together.</p>`;
+    }
+    html += `<p class="small">Solar input: ${a.solarWhy.length ? '<b>rising</b>, ' + a.solarWhy.join(', ') : 'normal'} · Seismic reports: ${a.q3} in 3 days (≈${a.expected3.toFixed(1)} usual)</p>`;
+    $('#forecast').innerHTML = html;
+    $('#forecast').classList.toggle('active', !!open);
+    const el = $('#stream');
+    if (st.streamUrl) {
+      if (el.dataset.src !== st.streamUrl) {
+        el.dataset.src = st.streamUrl;
+        el.innerHTML = `<audio controls preload="none" src="${st.streamUrl.replace(/"/g, '&quot;')}"></audio><p class="small">If it won't play, the station may be offline or the link may point to a web page instead of the audio itself.</p>`;
+      }
+    } else {
+      el.dataset.src = '';
+      el.innerHTML = '<p class="small">Add an earth-signal stream URL in Settings (for example the EPD Laboratories ELF/VLF feed) to listen here.</p>';
+    }
+  }
+  async function renderScore() {
+    const st = await QW.settings();
+    const fcs = await QW.getForecasts();
+    const done = fcs.filter(f => f.status !== 'open'), hits = done.filter(f => f.status === 'hit');
+    const base = done.filter(f => f.baseChance != null);
+    const expected = base.reduce((x, f) => x + f.baseChance, 0);
+    let baseTxt = '';
+    try { baseTxt = ` Luck alone: ≈${Math.round(QW.chance((await QW.baseRate(st)).perDay, st.forecastDays) * 100)}% per ${st.forecastDays}-day window at current settings.`; } catch {}
+    $('#score').innerHTML = done.length
+      ? `<p><b>${hits.length} hit${hits.length === 1 ? '' : 's'} / ${done.length} scored</b> (${Math.round(hits.length / done.length * 100)}%) · chance would give ≈${expected.toFixed(1)} hits.${baseTxt}</p>
+         <p class="small">${done.length < 10 ? 'Too few forecasts to judge yet. It needs at least 10–20 before the comparison means anything.' : hits.length > expected * 1.5 ? 'Running ahead of chance so far.' : 'Not beating chance so far.'}</p>`
+      : `<p class="small">No forecasts scored yet.${baseTxt}</p>`;
+    $('#forecasts').innerHTML = fcs.slice(0, 50).map(f =>
+      `<li><span class="mag fc-${f.status}">${f.status.toUpperCase()}</span><span>M${f.mag}+ · ${f.radiusKm} km · ${f.trigger}<br><span class="small">${
+        f.quake ? `M${f.quake.mag.toFixed(1)} ${f.quake.place}, ${(f.lead / QW.DAY).toFixed(1)} d lead` : f.detail || ''}</span></span><span class="when">${fmtT(f.t)}</span></li>`).join('');
   }
 
   // ---------- Charts ----------
@@ -82,14 +130,14 @@
     defs.forEach(d => {
       const sc = d.scale || 'y';
       if (seen.has(sc)) return; seen.add(sc);
-      scales[sc] = d.range ? { range: d.range } : {};
-      axes.push(Object.assign({}, axisStyle, { scale: sc, side: seen.size === 1 ? 3 : 1, size: 52, label: d.axis || '', labelSize: 18,
+      scales[sc] = d.log ? { distr: 3, log: 10 } : d.range ? { range: d.range } : {};
+      axes.push(Object.assign({}, axisStyle, d.fmtAxis ? { values: (u, vs) => vs.map(d.fmtAxis) } : {}, { scale: sc, side: seen.size === 1 ? 3 : 1, size: 52, label: d.axis || '', labelSize: 18,
         grid: seen.size === 1 ? axisStyle.grid : { show: false } }));
     });
     const series = [{}].concat(defs.map(d => ({
       label: d.label, stroke: css(d.color), width: 1.5, scale: d.scale || 'y', spanGaps: true,
       points: { show: d.points || false, size: 4 }, paths: d.step ? uPlot.paths.stepped({ align: 1 }) : undefined,
-      value: (u, v) => v == null ? '—' : v.toFixed(d.dp ?? 2),
+      value: (u, v) => v == null ? '—' : d.fmt ? d.fmt(v) : v.toFixed(d.dp ?? 2),
     })));
     charts[id] = new uPlot({
       width: el.clientWidth, height: opts.height || 220, scales, axes, series,
@@ -120,6 +168,10 @@
         data: async from => QW.polarization(
           await QW.getSeries('geo.H', from - QW.HOUR), await QW.getSeries('geo.Z', from - QW.HOUR)).filter(p => p[0] >= from),
       }]),
+      plot('c-sun', [
+        { s: 'sun.Xray', label: 'X-ray', color: '--s1', scale: 'xr', log: true, axis: 'W/m²', fmt: QW.xrayClass, fmtAxis: v => QW.xrayClass(v) },
+        { s: 'sun.F107', label: 'F10.7 sfu', color: '--s2', scale: 'f', axis: 'sfu', dp: 0, points: true },
+      ]),
       plot('c-space', [
         { s: 'sw.Kp', label: 'Kp', color: '--s4', step: true, range: [0, 9], axis: 'Kp', dp: 2 },
         { s: 'sw.speed', label: 'Wind km/s', color: '--s1', scale: 'v', axis: 'km/s', dp: 0 },
@@ -139,9 +191,10 @@
     $('#quakes').innerHTML = quakes.length ? quakes.slice(0, 100).map(q =>
       `<li><span class="mag">M${(q.mag ?? 0).toFixed(1)}</span><a href="${q.url}" target="_blank" rel="noopener">${q.place || q.id}</a><span class="when">${fmtT(q.t)}</span></li>`).join('')
       : '<li class="empty">No earthquakes recorded in the radius yet.</li>';
+    await renderScore();
     const al = await QW.getAlerts();
     $('#alerts').innerHTML = al.length ? al.slice(0, 200).map(a =>
-      `<li><span class="mag">${a.kind === 'quake' ? '⚑' : '◆'}</span><span><b>${a.title}</b><br><span class="small">${a.body || ''}</span></span><span class="when">${fmtT(a.t)}</span></li>`).join('')
+      `<li><span class="mag">${{ quake: '⚑', forecast: '◎', verify: '✓', coincidence: '☉' }[a.kind] || '◆'}</span><span><b>${a.title}</b><br><span class="small">${a.body || ''}</span></span><span class="when">${fmtT(a.t)}</span></li>`).join('')
       : '<li class="empty">No alerts yet.</li>';
   }
 
@@ -151,6 +204,7 @@
     $('#s-notify').checked = st.notify && 'Notification' in self && Notification.permission === 'granted';
     $('#s-radius').value = st.radiusKm; $('#s-minmag').value = st.minMag;
     $('#s-thresh').value = st.anomalyThreshold; $('#s-station').value = st.magStation;
+    $('#s-fdays').value = st.forecastDays; $('#s-fmag').value = st.forecastMag; $('#s-stream').value = st.streamUrl;
     const rows = await QW.allSamples();
     const first = rows.reduce((m, r) => Math.min(m, r.t), Infinity);
     $('#db-stats').textContent = rows.length
@@ -160,6 +214,9 @@
   async function saveSetting(k, v) { const s = await QW.getMeta('settings', {}); s[k] = v; await QW.setMeta('settings', s); }
   $('#s-radius').onchange = e => saveSetting('radiusKm', +e.target.value).then(() => refresh());
   $('#s-minmag').onchange = e => saveSetting('minMag', +e.target.value);
+  $('#s-fdays').onchange = e => saveSetting('forecastDays', +e.target.value);
+  $('#s-fmag').onchange = e => saveSetting('forecastMag', +e.target.value);
+  $('#s-stream').onchange = e => saveSetting('streamUrl', e.target.value.trim()).then(renderForecast);
   $('#s-thresh').onchange = e => saveSetting('anomalyThreshold', +e.target.value).then(() => renderStatus());
   $('#s-station').onchange = e => saveSetting('magStation', e.target.value).then(() => QW.setMeta('geo.last', 0)).then(() => refresh());
   $('#s-notify').onchange = async e => {
@@ -185,7 +242,7 @@
     download(`quake-watch-${stamp()}.csv`, csv, 'text/csv');
   };
   $('#export-json').onclick = async () => {
-    const backup = { app: 'quake-watch', v: 1, samples: await QW.allSamples(), quakes: await QW.getQuakes(), alerts: await QW.getAlerts() };
+    const backup = { app: 'quake-watch', v: 2, samples: await QW.allSamples(), quakes: await QW.getQuakes(), alerts: await QW.getAlerts(), forecasts: await QW.getForecasts() };
     download(`quake-watch-backup-${stamp()}.json`, JSON.stringify(backup), 'application/json');
   };
   $('#import').onchange = async e => {
@@ -197,6 +254,7 @@
       for (const [s, pts] of Object.entries(by)) await QW.putSamples(s, pts);
       await QW.putQuakes(b.quakes || []);
       for (const a of b.alerts || []) { delete a.id; await QW.addAlert(a); }
+      for (const f of b.forecasts || []) { delete f.id; await QW.addForecast(f); }
       toast(`Imported ${b.samples.length.toLocaleString()} samples.`);
       renderSettings(); renderCharts();
     } catch (err) { toast('Import failed: ' + err.message); }
@@ -257,7 +315,7 @@
       if (r.errors.length) toast('Some sources failed: ' + r.errors.map(e => e.split(':')[0]).join(', '));
       for (const a of r.alerts) toast(a.title + ' — ' + a.body);
       await notify(r.alerts);
-      await renderStatus(r.analysis);
+      await renderStatus(r.analysis); await renderForecast();
       if ($('#view-dash').classList.contains('active')) await renderCharts();
       if ($('#view-events').classList.contains('active')) await renderEvents();
     } catch (err) { console.error(err); toast('Update failed: ' + err.message); }
@@ -270,7 +328,7 @@
       try { swReg = await navigator.serviceWorker.register('sw.js'); await navigator.serviceWorker.ready; await registerPeriodic(); }
       catch (err) { console.warn('SW registration failed', err); }
     }
-    await renderStatus(); await renderCharts();
+    await renderStatus(); await renderForecast(); await renderCharts();
     await refresh();
     setInterval(refresh, POLL_MS);
     document.addEventListener('visibilitychange', async () => {

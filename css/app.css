@@ -63,3 +63,10 @@ h2 { font-size: 15px; margin: 0 0 8px; font-weight: 650; }
 .tabs button { flex: 1; background: none; border: 0; color: var(--muted); padding: 14px 0; font: inherit; font-weight: 600; cursor: pointer; }
 .tabs button.on { color: var(--accent); }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(76px + env(safe-area-inset-bottom)); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 10; max-width: calc(100% - 32px); }
+
+.forecast.active { border-color: var(--watch); box-shadow: 0 0 0 1px var(--watch) inset; }
+.forecast p { margin: 0 0 6px; }
+#stream audio { width: 100%; }
+.row input.wide { width: min(60%, 320px); background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; }
+.fc-hit { color: var(--quiet); } .fc-miss { color: var(--muted); } .fc-open { color: var(--watch); }
+.list .mag.fc-hit, .list .mag.fc-miss, .list .mag.fc-open { font-size: 12px; min-width: 48px; }
