@@ -46,6 +46,7 @@
       a.xray != null ? `X-ray ${QW.xrayClass(a.xray)}` : null,
       `quakes 3 d: ${a.q3} (≈${a.expected3.toFixed(1)} usual)`,
       last ? `updated ${ago(last)}` : 'not yet updated',
+      'app v11',
     ].filter(Boolean).join(' · ');
   }
 
