@@ -1,0 +1,8 @@
+{
+ "t": 1795610925068,
+ "values": null,
+ "historyDays": 2.365841724537037,
+ "candidates": [],
+ "status": "learning",
+ "note": "Needs 14+ days of index history to replay (has 2.4)."
+}
