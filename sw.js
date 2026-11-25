@@ -1,7 +1,7 @@
 /* Service worker: offline shell + background collection where the browser allows it. */
 importScripts('js/core.js');
 
-const CACHE = 'quake-watch-v7';
+const CACHE = 'quake-watch-v8';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'js/core.js', 'js/app.js', 'manifest.webmanifest',
   'vendor/uPlot.iife.min.js', 'vendor/uPlot.min.css', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon.svg',

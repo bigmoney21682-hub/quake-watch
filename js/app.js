@@ -3,7 +3,7 @@
   'use strict';
   const $ = s => document.querySelector(s);
   const POLL_MS = 5 * QW.MIN;
-  const BUILD = '2026-11-23b';
+  const BUILD = '2026-11-25b';
   let rangeH = 24, charts = {}, busy = false, quakes = [];
 
   const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -57,7 +57,7 @@
     let html = '<h2>Forecast</h2>';
     if (open) {
       const left = Math.max(0, (open.until - Date.now()) / QW.DAY);
-      html += `<p><b>Active:</b> M${open.mag}+ within ${open.radiusKm} km by ${fmtT(open.until)} <span class="small">(${left.toFixed(1)} days left)</span></p>
+      html += `<p><b>Active:</b> M${open.mag}+ within ${QW.mi(open.radiusKm)} miles by ${fmtT(open.until)} <span class="small">(${left.toFixed(1)} days left)</span></p>
         <p class="small">Trigger: ${open.trigger} · ${open.detail}${open.baseChance != null ? ` · chance by luck alone ≈ ${Math.round(open.baseChance * 100)}%` : ''}</p>`;
     } else {
       html += `<p class="small">No active forecast. One opens when the precursor index goes elevated, or when solar activity and local seismic reports rise together.</p>`;
@@ -69,7 +69,14 @@
     if (st.streamUrl) {
       if (el.dataset.src !== st.streamUrl) {
         el.dataset.src = st.streamUrl;
-        el.innerHTML = `<audio controls preload="none" src="${st.streamUrl.replace(/"/g, '&quot;')}"></audio><p class="small">If it won't play, the station may be offline or the link may point to a web page instead of the audio itself.</p>`;
+        el.innerHTML = `<audio controls preload="none" src="${st.streamUrl.replace(/"/g, '&quot;')}"></audio><p class="small" id="stream-status">Tap play to connect.</p>`;
+        const au = el.querySelector('audio'), ss = el.querySelector('#stream-status');
+        const say = t => { ss.textContent = t; };
+        au.onplay = () => say('Connecting…');
+        au.onwaiting = () => say('Buffering…');
+        au.onplaying = () => say('Connected and receiving audio. If you hear nothing, check your volume — the antenna can also go quiet or the station may be sending silence (EPD Labs sometimes runs it that way between sessions).');
+        au.onpause = () => say('Paused.');
+        au.onerror = () => say("Couldn't play this stream: the station may be offline, or the link points to a web page instead of the audio itself.");
       }
     } else {
       el.dataset.src = '';
@@ -89,8 +96,8 @@
          <p class="small">${done.length < 10 ? 'Too few forecasts to judge yet. It needs at least 10–20 before the comparison means anything.' : hits.length > expected * 1.5 ? 'Running ahead of chance so far.' : 'Not beating chance so far.'}</p>`
       : `<p class="small">No forecasts scored yet.${baseTxt}</p>`;
     $('#forecasts').innerHTML = fcs.slice(0, 50).map(f =>
-      `<li><span class="mag fc-${f.status}">${f.status.toUpperCase()}</span><span>M${f.mag}+ · ${f.radiusKm} km · ${f.trigger}<br><span class="small">${
-        f.quake ? `M${f.quake.mag.toFixed(1)} ${f.quake.place}, ${(f.lead / QW.DAY).toFixed(1)} d lead` : f.detail || ''}</span></span><span class="when">${fmtT(f.t)}</span></li>`).join('');
+      `<li><span class="mag fc-${f.status}">${f.status.toUpperCase()}</span><span>M${f.mag}+ · ${QW.mi(f.radiusKm)} mi · ${f.trigger}<br><span class="small">${
+        f.quake ? `M${f.quake.mag.toFixed(1)} ${QW.imperial(f.quake.place)}, ${(f.lead / QW.DAY).toFixed(1)} d lead` : f.detail || ''}</span></span><span class="when">${fmtT(f.t)}</span></li>`).join('');
   }
 
   // ---------- Charts ----------
@@ -115,6 +122,56 @@
     };
   }
 
+  /* Baseline bands and fixed limit lines. A def may carry
+   *   band:   { lo, hi, median, k }  — shaded normal range; points outside it are marked
+   *   limits: [{ v, label }]         — horizontal reference lines (e.g. storm threshold) */
+  function limitsPlugin(defs) {
+    const y = (u, d, v) => Math.round(u.valToPos(v, d.scale || 'y', true));
+    const line = (u, d, v, color, label, dash) => {
+      const { ctx } = u, py = y(u, d, v), { left, width, top, height } = u.bbox;
+      if (py < top || py > top + height) return;
+      ctx.strokeStyle = color; ctx.fillStyle = color; ctx.setLineDash(dash); ctx.lineWidth = devicePixelRatio;
+      ctx.beginPath(); ctx.moveTo(left, py); ctx.lineTo(left + width, py); ctx.stroke();
+      if (label) { ctx.textAlign = 'left'; ctx.fillText(label, left + 4 * devicePixelRatio, py - 3 * devicePixelRatio); }
+    };
+    return {
+      hooks: {
+        drawAxes: [u => { // under the series
+          const { ctx } = u, { left, width, top, height } = u.bbox;
+          ctx.save(); ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
+          defs.forEach(d => {
+            if (!d.band) return;
+            const y0 = y(u, d, d.band.hi), y1 = y(u, d, d.band.lo);
+            ctx.globalAlpha = 0.12; ctx.fillStyle = css('--s3'); ctx.fillRect(left, y0, width, y1 - y0);
+          });
+          ctx.restore();
+        }],
+        draw: [u => {
+          const { ctx } = u, { left, width, top, height } = u.bbox, dpr = devicePixelRatio;
+          ctx.save(); ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
+          ctx.font = `${10 * dpr}px system-ui`;
+          defs.forEach((d, i) => {
+            if (d.band) {
+              const b = d.band, c = css('--s3');
+              line(u, d, b.median, c, 'baseline', [2 * dpr, 3 * dpr]);
+              line(u, d, b.hi, c, `+${b.k}σ`, [6 * dpr, 4 * dpr]);
+              line(u, d, b.lo, c, `−${b.k}σ`, [6 * dpr, 4 * dpr]);
+              ctx.fillStyle = css('--quake'); ctx.setLineDash([]);
+              const xs = u.data[0], vs = u.data[i + 1];
+              for (let j = 0; j < vs.length; j++) {
+                const v = vs[j]; if (v == null || (v <= b.hi && v >= b.lo)) continue;
+                const px = u.valToPos(xs[j], 'x', true), py = y(u, d, v);
+                ctx.beginPath(); ctx.arc(px, py, 3.5 * dpr, 0, 2 * Math.PI); ctx.fill();
+              }
+            }
+            (d.limits || []).forEach(l => line(u, d, l.v, css('--muted'), l.label, [6 * dpr, 4 * dpr]));
+          });
+          ctx.restore();
+        }],
+      },
+    };
+  }
+
   async function plot(id, defs, opts = {}) {
     const el = document.getElementById(id);
     const from = rangeH ? Date.now() - rangeH * QW.HOUR : 0;
@@ -131,7 +188,10 @@
     defs.forEach(d => {
       const sc = d.scale || 'y';
       if (seen.has(sc)) return; seen.add(sc);
-      scales[sc] = d.log ? { distr: 3, log: 10 } : d.range ? { range: d.range } : {};
+      // Stretch the axis so the baseline band / limit lines stay in view.
+      const ext = defs.filter(x => (x.scale || 'y') === sc).flatMap(x => [...(x.band ? [x.band.lo, x.band.hi] : []), ...(x.limits || []).map(l => l.v)]);
+      scales[sc] = d.log ? { distr: 3, log: 10 } : d.range ? { range: d.range }
+        : ext.length ? { range: (u, mn, mx) => uPlot.rangeNum(Math.min(mn ?? Infinity, ...ext), Math.max(mx ?? -Infinity, ...ext), 0.1, true) } : {};
       axes.push(Object.assign({}, axisStyle, d.fmtAxis ? { values: (u, vs) => vs.map(d.fmtAxis) } : {}, { scale: sc, side: seen.size === 1 ? 3 : 1, size: 52, label: d.axis || '', labelSize: 18,
         grid: seen.size === 1 ? axisStyle.grid : { show: false } }));
     });
@@ -142,7 +202,7 @@
     })));
     charts[id] = new uPlot({
       width: el.clientWidth, height: opts.height || 220, scales, axes, series,
-      cursor: { sync: { key: 'qw' } }, legend: { live: true }, plugins: [quakeMarkers()],
+      cursor: { sync: { key: 'qw' } }, legend: { live: true }, plugins: [limitsPlugin(defs), quakeMarkers()],
     }, data, el);
   }
 
@@ -150,22 +210,29 @@
     quakes = await QW.getQuakes();
     const st = await QW.settings();
     $('#mag-hint').textContent = `USGS ${st.magStation}, 1-min`;
+    // Bands use the same 8-day window and threshold the anomaly index uses, whatever range is shown.
+    const k = st.anomalyThreshold, from8 = Date.now() - 8 * QW.DAY;
+    const [bE, bTEC, bULF] = await Promise.all([
+      QW.getSeries('tell.E', from8).then(p => QW.baselineBand(p, k)),
+      QW.getSeries('iono.dTEC', from8).then(p => QW.baselineBand(p, k)),
+      Promise.all([QW.getSeries('geo.H', from8), QW.getSeries('geo.Z', from8)]).then(([H, Z]) => QW.baselineBand(QW.polarization(H, Z), k)),
+    ]);
     await Promise.all([
       plot('c-tell', [
-        { s: 'tell.E', label: '|E| mV/km', color: '--s1', points: true },
+        { s: 'tell.E', label: '|E| mV/km', color: '--s1', points: true, band: bE },
         { s: 'tell.Ex', label: 'Ex', color: '--s2' },
         { s: 'tell.Ey', label: 'Ey', color: '--s3' },
       ]),
       plot('c-iono', [
         { s: 'iono.TEC', label: 'TEC (TECU)', color: '--s2', axis: 'TECU', points: true },
-        { s: 'iono.dTEC', label: 'Anomaly (TECU)', color: '--s1', scale: 'd', axis: 'Δ TECU', points: true },
+        { s: 'iono.dTEC', label: 'Anomaly (TECU)', color: '--s1', scale: 'd', axis: 'Δ TECU', points: true, band: bTEC },
       ]),
       plot('c-mag', [
         { s: 'geo.H', label: 'H (nT)', color: '--s2', axis: 'H nT', dp: 1 },
         { s: 'geo.Z', label: 'Z (nT)', color: '--s3', scale: 'z', axis: 'Z nT', dp: 1 },
       ]),
       plot('c-ulf', [{
-        label: 'Z/H ratio', color: '--s4', dp: 3,
+        label: 'Z/H ratio', color: '--s4', dp: 3, band: bULF,
         data: async from => QW.polarization(
           await QW.getSeries('geo.H', from - QW.HOUR), await QW.getSeries('geo.Z', from - QW.HOUR)).filter(p => p[0] >= from),
       }]),
@@ -174,10 +241,12 @@
         { s: 'sun.F107', label: 'F10.7 sfu', color: '--s2', scale: 'f', axis: 'sfu', dp: 0, points: true },
       ]),
       plot('c-space', [
-        { s: 'sw.Kp', label: 'Kp', color: '--s4', step: true, range: [0, 9], axis: 'Kp', dp: 2 },
-        { s: 'sw.speed', label: 'Wind km/s', color: '--s1', scale: 'v', axis: 'km/s', dp: 0 },
+        { s: 'sw.Kp', label: 'Kp', color: '--s4', step: true, range: [0, 9], axis: 'Kp', dp: 2, limits: [{ v: 5, label: 'storm (Kp 5)' }] },
+        { label: 'Wind mi/s', color: '--s1', scale: 'v', axis: 'mi/s', dp: 0,
+          data: async from => (await QW.getSeries('sw.speed', from)).map(([t, v]) => [t, v == null ? v : v / QW.KM_PER_MI]) },
       ]),
-      plot('c-idx', [{ s: 'idx', label: 'Index', color: '--s1', points: true }], { height: 180 }),
+      plot('c-idx', [{ s: 'idx', label: 'Index', color: '--s1', points: true,
+        limits: [{ v: k, label: 'elevated' }, { v: +(k * 0.66).toFixed(2), label: 'watch' }] }], { height: 180 }),
     ]);
   }
   new ResizeObserver(() => { for (const [id, c] of Object.entries(charts)) c.setSize({ width: document.getElementById(id).clientWidth, height: c.height }); })
@@ -188,14 +257,14 @@
   async function renderEvents() {
     const st = await QW.settings();
     quakes = await QW.getQuakes();
-    $('#q-hint').textContent = `within ${st.radiusKm} km · last 30 days · USGS`;
+    $('#q-hint').textContent = `within ${QW.mi(st.radiusKm)} miles · last 30 days · USGS`;
     $('#quakes').innerHTML = quakes.length ? quakes.slice(0, 100).map(q =>
-      `<li><span class="mag">M${(q.mag ?? 0).toFixed(1)}</span><a href="${q.url}" target="_blank" rel="noopener">${q.place || q.id}</a><span class="when">${fmtT(q.t)}</span></li>`).join('')
+      `<li><span class="mag">M${(q.mag ?? 0).toFixed(1)}</span><a href="${q.url}" target="_blank" rel="noopener">${QW.imperial(q.place) || q.id}</a><span class="when">${fmtT(q.t)}</span></li>`).join('')
       : '<li class="empty">No earthquakes recorded in the radius yet.</li>';
     await renderScore();
     const al = await QW.getAlerts();
     $('#alerts').innerHTML = al.length ? al.slice(0, 200).map(a =>
-      `<li><span class="mag">${{ quake: '⚑', forecast: '◎', verify: '✓', coincidence: '☉' }[a.kind] || '◆'}</span><span><b>${a.title}</b><br><span class="small">${a.body || ''}</span></span><span class="when">${fmtT(a.t)}</span></li>`).join('')
+      `<li><span class="mag">${{ quake: '⚑', forecast: '◎', verify: '✓', coincidence: '☉' }[a.kind] || '◆'}</span><span><b>${QW.imperial(a.title)}</b><br><span class="small">${QW.imperial(a.body) || ''}</span></span><span class="when">${fmtT(a.t)}</span></li>`).join('')
       : '<li class="empty">No alerts yet.</li>';
   }
 
@@ -212,7 +281,7 @@
       'permission: ' + ('Notification' in self ? Notification.permission : 'n/a'),
       'service worker: ' + (swReg?.active ? 'active' : swReg?.installing || swReg?.waiting ? 'installing' : 'none' + (swError ? ` (${swError})` : '')),
     ].join(' · ');
-    $('#s-radius').value = st.radiusKm; $('#s-minmag').value = st.minMag;
+    $('#s-radius').value = QW.mi(st.radiusKm); $('#s-minmag').value = st.minMag;
     $('#s-thresh').value = st.anomalyThreshold; $('#s-station').value = st.magStation;
     $('#s-fdays').value = st.forecastDays; $('#s-fmag').value = st.forecastMag; $('#s-stream').value = st.streamUrl;
     const rows = await QW.allSamples();
@@ -222,7 +291,7 @@
     $('#bg-status').textContent = await bgStatus();
   }
   async function saveSetting(k, v) { const s = await QW.getMeta('settings', {}); s[k] = v; await QW.setMeta('settings', s); }
-  $('#s-radius').onchange = e => saveSetting('radiusKm', +e.target.value).then(() => refresh());
+  $('#s-radius').onchange = e => saveSetting('radiusKm', +e.target.value * QW.KM_PER_MI).then(() => refresh());
   $('#s-minmag').onchange = e => saveSetting('minMag', +e.target.value);
   $('#s-fdays').onchange = e => saveSetting('forecastDays', +e.target.value);
   $('#s-fmag').onchange = e => saveSetting('forecastMag', +e.target.value);

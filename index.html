@@ -46,6 +46,7 @@
       <div class="ranges" role="tablist" id="ranges">
         <button data-h="6">6h</button><button data-h="24" class="on">24h</button><button data-h="168">7d</button><button data-h="720">30d</button><button data-h="0">All</button>
       </div>
+      <p class="small">Green band = each signal's normal range (7-day median ± threshold σ). Red dots fall outside it. Grey horizontal dashed lines are fixed limits (storm, watch, elevated).</p>
 
       <div class="card chart-card"><h2>Telluric currents <span class="hint">geoelectric field, FL grid · NOAA SWPC</span></h2><div class="chart" id="c-tell"></div></div>
       <div class="card chart-card"><h2>Ionosphere <span class="hint">total electron content over FL · NOAA GloTEC</span></h2><div class="chart" id="c-iono"></div></div>
@@ -71,7 +72,7 @@
         <label class="row"><span>Notifications</span><input type="checkbox" id="s-notify"></label>
         <p class="small warn" id="notify-help"></p>
         <div class="btns"><button id="test-notify">Send test notification</button></div>
-        <label class="row"><span>Earthquake radius (km)</span><input type="number" id="s-radius" min="100" max="3000" step="50"></label>
+        <label class="row"><span>Earthquake radius (miles)</span><input type="number" id="s-radius" min="60" max="1900" step="25"></label>
         <label class="row"><span>Notify at magnitude ≥</span><input type="number" id="s-minmag" min="1" max="8" step="0.1"></label>
         <label class="row"><span>Elevated index threshold</span><input type="number" id="s-thresh" min="1" max="10" step="0.1"></label>
         <label class="row"><span>Magnetometer</span>
@@ -105,7 +106,7 @@
         <h2>About this monitor</h2>
         <p>Inspired by Eric Dollard's view of the Earth as an electrical system — telluric earth currents in the crust, the ionosphere as the upper plate of a planetary capacitor — this app watches those signals over Florida and flags when they deviate from their own recent baseline.</p>
         <p><b>How the index works.</b> Each local signal (telluric |E|, TEC anomaly, ULF Z/H ratio) is scored as a robust z-score against its trailing 7 days. The index is the RMS of those scores. If Kp ≥ 5 or Dst ≤ −50 nT, the sun is driving the disturbance and the alert is downgraded to "storm".</p>
-        <p><b>Forecasts.</b> Every alert is written down as a testable prediction (magnitude, radius, time window) and scored automatically against USGS. The scorecard compares the hit rate with the chance of a quake turning up by luck alone, which is about 14% per 7-day window for M2.5+ within 800 km of central Florida. A method that really predicts quakes has to beat that number over many alerts.</p>
+        <p><b>Forecasts.</b> Every alert is written down as a testable prediction (magnitude, radius, time window) and scored automatically against USGS. The scorecard compares the hit rate with the chance of a quake turning up by luck alone, which is about 14% per 7-day window for M2.5+ within 500 miles of central Florida. A method that really predicts quakes has to beat that number over many alerts.</p>
         <p><b>Honest caveat.</b> No precursor method — telluric, ionospheric or otherwise — has yet shown reliable, repeatable earthquake prediction, and Florida is one of the least seismically active places in the U.S. Treat this as an experiment: the logged history and the USGS quake overlay let you judge for yourself whether anomalies ever line up with real events. Never use it for safety decisions.</p>
         <p class="small">Data: NOAA SWPC (geoelectric field model, GloTEC, Kp, Dst, DSCOVR/ACE solar wind), USGS Geomagnetism Program, USGS Earthquake Hazards Program. The telluric values are NOAA's modeled geoelectric field (driven by real magnetometer data), not direct electrode measurements.</p>
       </div>

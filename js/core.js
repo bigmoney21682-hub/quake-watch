@@ -8,7 +8,7 @@
   // ---------- Config ----------
   QW.FL = { lat: 27.8, lon: -81.7, bbox: { w: -87.7, e: -79.8, s: 24.4, n: 31.1 } };
   QW.DEFAULTS = {
-    radiusKm: 800,          // earthquake watch radius around central Florida
+    radiusKm: 804.672,      // earthquake watch radius around central Florida (500 miles; stored in km for USGS)
     minMag: 2.5,            // notify on quakes at/above this magnitude
     anomalyThreshold: 3,    // composite robust z-score that raises an "Elevated" alert
     notify: true,
@@ -20,6 +20,12 @@
   const SWPC = 'https://services.swpc.noaa.gov';
   const DAY = 864e5, HOUR = 36e5, MIN = 6e4;
   QW.DAY = DAY; QW.HOUR = HOUR; QW.MIN = MIN;
+
+  // ---------- Imperial display (data stays metric internally: USGS queries take km) ----------
+  QW.KM_PER_MI = 1.609344;
+  QW.mi = km => Math.round(km / QW.KM_PER_MI);
+  // Rewrites any "12 km" / "12.3 km" in a string (USGS place names, stored alert text) to miles.
+  QW.imperial = s => s == null ? s : String(s).replace(/(\d+(?:\.\d+)?)\s?km\b(?!\/)/g, (_, n) => `${QW.mi(+n)} mi`);
 
   // Series catalogue: id -> label/unit/group. "local" series feed the anomaly index.
   QW.SERIES = {
@@ -33,7 +39,7 @@
     'idx':      { label: 'Precursor index (RMS |z|)', unit: '', group: 'index' },
     'sw.Kp':    { label: 'Planetary Kp', unit: '', group: 'space' },
     'sw.Dst':   { label: 'Dst ring current', unit: 'nT', group: 'space' },
-    'sw.speed': { label: 'Solar wind speed', unit: 'km/s', group: 'space' },
+    'sw.speed': { label: 'Solar wind speed', unit: 'mi/s', group: 'space' },
     'sw.Bz':    { label: 'IMF Bz (GSM)', unit: 'nT', group: 'space' },
     'sw.Ap':    { label: 'Running a-index', unit: '', group: 'space' },
     'sun.F107': { label: 'Solar flux F10.7', unit: 'sfu', group: 'sun' },
@@ -235,12 +241,21 @@
 
   // ---------- Analysis ----------
   const median = a => { const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
-  function robustZ(value, baseline) {
+  function robustStats(baseline) {
     if (baseline.length < 12) return null;
     const m = median(baseline);
-    const mad = median(baseline.map(v => Math.abs(v - m))) * 1.4826 || 1e-9;
-    return (value - m) / mad;
+    return { median: m, sigma: median(baseline.map(v => Math.abs(v - m))) * 1.4826 || 1e-9, n: baseline.length };
   }
+  function robustZ(value, baseline) {
+    const b = robustStats(baseline);
+    return b && (value - b.median) / b.sigma;
+  }
+  /* The band a signal is judged against: its trailing-7-day median ± k robust sigmas,
+   * using the same points analyze() uses (last 8 days, excluding the most recent hour). */
+  QW.baselineBand = (pts, k, now = Date.now()) => {
+    const b = robustStats(pts.filter(p => p[0] > now - 8 * DAY && p[0] <= now - HOUR).map(p => p[1]));
+    return b && Object.assign(b, { k, lo: b.median - k * b.sigma, hi: b.median + k * b.sigma });
+  };
   // Rolling 60-min std of 1-min first differences (ULF-band activity proxy).
   function ulfStd(pts, endT) {
     const w = pts.filter(p => p[0] > endT - HOUR && p[0] <= endT);
@@ -340,7 +355,7 @@
     await QW.setMeta('initialized', true);
     if (!firstRun) {
       for (const q of newQuakes.filter(q => q.mag >= st.minMag && q.t > Date.now() - 2 * DAY))
-        alerts.push({ kind: 'quake', title: `M${q.mag.toFixed(1)} earthquake`, body: q.place, ref: q.id });
+        alerts.push({ kind: 'quake', title: `M${q.mag.toFixed(1)} earthquake`, body: QW.imperial(q.place), ref: q.id });
     }
     const prev = await QW.getMeta('lastLevel', 'baseline');
     const prevCo = await QW.getMeta('lastCoincidence', false);
@@ -352,7 +367,7 @@
         trigger, detail, index: a.index, status: 'open' };
       try { f.baseChance = QW.chance((await QW.baseRate(st)).perDay, st.forecastDays); } catch {}
       f.id = await QW.addForecast(f); open = f;
-      alerts.push({ kind: 'forecast', title: `Forecast: M${st.forecastMag}+ within ${st.radiusKm} km in ${st.forecastDays} days`,
+      alerts.push({ kind: 'forecast', title: `Forecast: M${st.forecastMag}+ within ${QW.mi(st.radiusKm)} miles in ${st.forecastDays} days`,
         body: `${detail}` + (f.baseChance != null ? ` · chance by luck alone ≈ ${Math.round(f.baseChance * 100)}%` : '') });
     };
     if (a.level === 'elevated' && prev !== 'elevated') {
@@ -374,10 +389,10 @@
       const hit = allQ.filter(q => q.t >= f.t && q.t <= f.until && q.mag >= f.mag && QW.distKm(q) <= f.radiusKm).sort((x, y) => x.t - y.t)[0];
       if (hit) {
         Object.assign(f, { status: 'hit', quake: { id: hit.id, mag: hit.mag, place: hit.place, t: hit.t }, lead: hit.t - f.t });
-        alerts.push({ kind: 'verify', title: 'Forecast HIT', body: `M${hit.mag.toFixed(1)} ${hit.place} — ${((hit.t - f.t) / DAY).toFixed(1)} days after the alert` });
+        alerts.push({ kind: 'verify', title: 'Forecast HIT', body: `M${hit.mag.toFixed(1)} ${QW.imperial(hit.place)} — ${((hit.t - f.t) / DAY).toFixed(1)} days after the alert` });
       } else if (Date.now() > f.until) {
         f.status = 'miss';
-        alerts.push({ kind: 'verify', title: 'Forecast window closed: miss', body: `No M${f.mag}+ within ${f.radiusKm} km in ${Math.round((f.until - f.t) / DAY)} days` });
+        alerts.push({ kind: 'verify', title: 'Forecast window closed: miss', body: `No M${f.mag}+ within ${QW.mi(f.radiusKm)} miles in ${Math.round((f.until - f.t) / DAY)} days` });
       } else continue;
       await QW.putForecast(f);
     }
