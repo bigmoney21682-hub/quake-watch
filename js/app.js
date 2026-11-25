@@ -462,7 +462,13 @@
   (async function init() {
     if ('serviceWorker' in navigator) {
       try {
-        swReg = await navigator.serviceWorker.register('sw.js');
+        swReg = await navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' });
+        // A new deploy installs a new worker; reload once so the page runs the new code too.
+        const hadController = !!navigator.serviceWorker.controller;
+        let reloaded = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (hadController && !reloaded) { reloaded = true; location.reload(); }
+        });
         await Promise.race([navigator.serviceWorker.ready, new Promise(r => setTimeout(r, 8000))]);
         await registerPeriodic();
       } catch (err) { swError = (err && (err.name + ': ' + err.message)) || String(err); console.warn('SW registration failed', err); }
@@ -471,6 +477,7 @@
     await refresh();
     setInterval(refresh, POLL_MS);
     document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible') swReg?.update().catch(() => {});
       if (document.visibilityState === 'visible' && Date.now() - await QW.getMeta('lastCollect', 0) > POLL_MS) refresh();
     });
   })();

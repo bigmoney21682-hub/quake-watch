@@ -1,7 +1,7 @@
 /* Service worker: offline shell + background collection where the browser allows it. */
 importScripts('js/core.js');
 
-const CACHE = 'quake-watch-v9';
+const CACHE = 'quake-watch-v10';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'js/core.js', 'js/app.js', 'manifest.webmanifest',
   'vendor/uPlot.iife.min.js', 'vendor/uPlot.min.css', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon.svg',
@@ -15,11 +15,12 @@ self.addEventListener('activate', e => {
     .then(() => self.clients.claim()));
 });
 // App shell: network-first (so updates land immediately), cache fallback when offline.
+// cache: 'no-cache' revalidates with the server, skipping GitHub Pages' 10-minute HTTP cache.
 // Data APIs (cross-origin) are never cached here; history lives in IndexedDB.
 self.addEventListener('fetch', e => {
   const u = new URL(e.request.url);
   if (u.origin !== location.origin || e.request.method !== 'GET') return;
-  e.respondWith(fetch(e.request).then(r => {
+  e.respondWith(fetch(e.request, { cache: 'no-cache' }).then(r => {
     if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); }
     return r;
   }).catch(() => caches.match(e.request, { ignoreSearch: true })));
