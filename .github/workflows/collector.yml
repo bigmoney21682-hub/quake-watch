@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write   # to commit calibration.json when the self-tuner's result changes
 
 jobs:
   collect:
@@ -45,6 +45,18 @@ jobs:
           APP_URL: https://bigmoney21682-hub.github.io/quake-watch/
           QW_SETTINGS: ${{ vars.QW_SETTINGS }}
         run: node run.mjs ${{ inputs.test && '--test' || '' }}
+      - name: Publish calibration
+        if: success()
+        run: |
+          git add calibration.json 2>/dev/null || exit 0
+          # Ignore the timestamp: commit only when the learned values or status actually change.
+          if git diff --cached --quiet -- calibration.json; then exit 0; fi
+          if git show HEAD:calibration.json >/dev/null 2>&1 && \
+             [ "$(git show HEAD:calibration.json | jq -c '{values,status,n:[.candidates[]?.n]}')" = "$(jq -c '{values,status,n:[.candidates[]?.n]}' calibration.json)" ]; then exit 0; fi
+          git config user.name 'quake-watch-bot'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Update self-tuned calibration' -- calibration.json
+          git pull --rebase -q && git push -q
       - name: Save history
         if: always()
         uses: actions/cache/save@v4

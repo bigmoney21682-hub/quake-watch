@@ -3,7 +3,7 @@
   'use strict';
   const $ = s => document.querySelector(s);
   const POLL_MS = 5 * QW.MIN;
-  const BUILD = '2026-11-25b';
+  const BUILD = '2026-11-25c';
   let rangeH = 24, charts = {}, busy = false, quakes = [];
 
   const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -283,12 +283,25 @@
     ].join(' · ');
     $('#s-radius').value = QW.mi(st.radiusKm); $('#s-minmag').value = st.minMag;
     $('#s-thresh').value = st.anomalyThreshold; $('#s-station').value = st.magStation;
+    $('#s-auto').checked = st.autoTune;
+    $('#s-thresh').disabled = $('#s-fdays').disabled = st.autoTune;
+    $('#cal-status').textContent = calText(st, await QW.getMeta('calibration'));
     $('#s-fdays').value = st.forecastDays; $('#s-fmag').value = st.forecastMag; $('#s-stream').value = st.streamUrl;
     const rows = await QW.allSamples();
     const first = rows.reduce((m, r) => Math.min(m, r.t), Infinity);
     $('#db-stats').textContent = rows.length
       ? `${rows.length.toLocaleString()} samples logged since ${fmtT(first)}.` : 'No history yet.';
     $('#bg-status').textContent = await bgStatus();
+  }
+  function calText(st, cal) {
+    const how = 'The cloud collector replays its stored index history against real USGS quakes once a day and picks the threshold and window that beat luck by the widest margin. Radius and magnitude stay fixed, because widening them would only make hits easier by chance.';
+    if (!st.autoTune) return 'Off: the threshold and window below are your own. ' + how;
+    const when = cal ? ` Last check ${ago(cal.t)}.` : '';
+    const state = !cal ? 'Waiting for the first calibration from the cloud collector.'
+      : cal.status === 'tuned' ? `Tuned: ${cal.note}`
+      : cal.status === 'chance' ? `Using defaults: ${cal.note}`
+      : `Still learning: ${cal.note}`;
+    return `${state}${when} ${how}`;
   }
   async function saveSetting(k, v) { const s = await QW.getMeta('settings', {}); s[k] = v; await QW.setMeta('settings', s); }
   $('#s-radius').onchange = e => saveSetting('radiusKm', +e.target.value * QW.KM_PER_MI).then(() => refresh());
@@ -300,6 +313,7 @@
     e.target.value = v;
     saveSetting('streamUrl', v).then(renderForecast);
   };
+  $('#s-auto').onchange = e => saveSetting('autoTune', e.target.checked).then(renderSettings).then(() => renderStatus());
   $('#s-thresh').onchange = e => saveSetting('anomalyThreshold', +e.target.value).then(() => renderStatus());
   $('#s-station').onchange = e => saveSetting('magStation', e.target.value).then(() => QW.setMeta('geo.last', 0)).then(() => refresh());
   const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -430,6 +444,9 @@
     if (busy) return; busy = true;
     $('#refresh').classList.add('spin');
     try {
+      if (Date.now() - (await QW.getMeta('calSync', 0)) > QW.HOUR) {
+        await QW.syncCalibration().catch(() => null); await QW.setMeta('calSync', Date.now());
+      }
       const r = await QW.collect();
       if (r.errors.length) toast('Some sources failed: ' + r.errors.map(e => e.split(':')[0]).join(', '));
       for (const a of r.alerts) toast(a.title + ' — ' + a.body);

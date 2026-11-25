@@ -18,7 +18,9 @@ const SERVER = (process.env.NTFY_SERVER || 'https://ntfy.sh').replace(/\/$/, '')
 const TOPIC = process.env.NTFY_TOPIC;
 const DRY = process.env.DRY_RUN === '1';
 const APP_URL = process.env.APP_URL || '';
-const KEEP_MS = 10 * 864e5; // keep 10 days of samples (index needs 7-day baselines)
+const KEEP_MS = 10 * 864e5; // keep 10 days of raw samples (index needs 7-day baselines)
+const KEEP_LONG = { idx: 400 * 864e5, storm: 400 * 864e5 }; // the self-tuner replays these
+const CALIBRATION = resolve(process.env.CALIBRATION_FILE || `${here}/../calibration.json`);
 
 globalThis.self = globalThis;
 vm.runInThisContext(await readFile(`${here}/../js/core.js`, 'utf8'), { filename: 'core.js' });
@@ -53,7 +55,7 @@ async function load() {
 }
 async function save() {
   const cut = Date.now() - KEEP_MS;
-  const samples = (await storeAll('samples')).map(([, r]) => r).filter(r => r.t >= cut).map(r => [r.s, r.t, r.v]);
+  const samples = (await storeAll('samples')).map(([, r]) => r).filter(r => r.t >= (KEEP_LONG[r.s] ? Date.now() - KEEP_LONG[r.s] : cut)).map(r => [r.s, r.t, r.v]);
   const quakes = (await storeAll('quakes')).map(([, q]) => q).filter(q => q.t >= Date.now() - 60 * 864e5);
   const alerts = (await storeAll('alerts')).map(([, a]) => a).sort((x, y) => y.t - x.t).slice(0, 300);
   const forecasts = (await storeAll('forecasts')).map(([, f]) => f);
@@ -95,5 +97,14 @@ if (process.argv.includes('--test')) {
   console.log(`Level ${a.level}, index ${a.index == null ? '—' : a.index.toFixed(2)}, solar: ${a.solarWhy.join(', ') || 'normal'}, quakes 3d: ${a.q3}`);
   for (const al of r.alerts) await send(al);
   console.log(`${r.alerts.length} alert(s).`);
+  // Re-tune once a day and publish the result for the phone app (the workflow commits it if it changed).
+  const cal = await QW.getMeta('calibration');
+  if (!cal || Date.now() - cal.t > 864e5 || process.argv.includes('--calibrate')) {
+    try {
+      const c = await QW.calibrate();
+      console.log(`Calibration: ${c.status} — ${c.note}`);
+      await writeFile(CALIBRATION, JSON.stringify(c, null, 1) + '\n');
+    } catch (err) { console.warn('Calibration failed:', err.message); }
+  }
 }
 await save();

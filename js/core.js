@@ -16,7 +16,13 @@
     forecastDays: 7,        // a precursor alert predicts a quake within this many days…
     forecastMag: 2.5,       // …at or above this magnitude, inside radiusKm
     streamUrl: 'https://hakasays.com:3448/EPDAntennaField.mp3', // EPD Laboratories long-line antenna, Tonopah NV (Icecast)
+    autoTune: true,         // let the backtest below pick anomalyThreshold + forecastDays
   };
+  // Settings the self-tuner may change. Radius and forecast magnitude stay fixed on purpose:
+  // widening them only makes hits easier by luck, which is not learning.
+  QW.TUNED = ['anomalyThreshold', 'forecastDays'];
+  // The cloud collector publishes what it learned here so the phone uses the same settings.
+  QW.CALIBRATION_URL = 'https://raw.githubusercontent.com/bigmoney21682-hub/quake-watch/main/calibration.json';
   const SWPC = 'https://services.swpc.noaa.gov';
   const DAY = 864e5, HOUR = 36e5, MIN = 6e4;
   QW.DAY = DAY; QW.HOUR = HOUR; QW.MIN = MIN;
@@ -95,7 +101,12 @@
   QW.allSamples = () => tx('samples', 'readonly', st => st.getAll());
   QW.getMeta = (k, dflt) => tx('meta', 'readonly', st => st.get(k)).then(v => v === undefined ? dflt : v);
   QW.setMeta = (k, v) => tx('meta', 'readwrite', st => st.put(v, k));
-  QW.settings = () => QW.getMeta('settings', {}).then(s => Object.assign({}, QW.DEFAULTS, s));
+  QW.settings = async () => {
+    const s = Object.assign({}, QW.DEFAULTS, await QW.getMeta('settings', {}));
+    const cal = await QW.getMeta('calibration');
+    if (s.autoTune && cal && cal.values) for (const k of QW.TUNED) if (cal.values[k] != null) s[k] = cal.values[k];
+    return s;
+  };
   QW.putQuakes = qs => tx('quakes', 'readwrite', st => qs.forEach(q => st.put(q)));
   QW.getQuakes = () => tx('quakes', 'readonly', st => st.getAll()).then(a => a.sort((x, y) => y.t - x.t));
   QW.addAlert = a => tx('alerts', 'readwrite', st => st.add(Object.assign({ t: Date.now() }, a)));
@@ -332,6 +343,65 @@
       xmax, solarWhy, q3, expected3, coincidence, level, reason, t: now };
   };
 
+  // ---------- Self-tuning ----------
+  /* Replays the stored precursor-index history against real USGS quakes for a grid of
+   * (threshold, window) pairs, the way collect() would have issued forecasts, and scores each
+   * pair by skill over luck: z = (hits − expected) / √Σp(1−p), with p the Poisson chance of a
+   * qualifying quake in that window. Raising the threshold or shortening the window lowers the
+   * luck baseline, so a pair only wins if the signal really lines up with quakes.
+   * Guards against fitting noise: ≥ MIN_N replayed forecasts, z ≥ 3 to adopt anything (≈ p 0.05 after correcting for the 30 pairs tried), a
+   * margin of 0.5 over the current pick to switch, and a fall back to defaults when nothing
+   * beats chance. */
+  QW.TUNE_GRID = { anomalyThreshold: [2, 2.5, 3, 3.5, 4, 5], forecastDays: [3, 5, 7, 10, 14] };
+  const MIN_N = 8;
+  QW.calibrate = async function () {
+    const st = await QW.settings(), now = Date.now();
+    const prev = await QW.getMeta('calibration');
+    const idx = await QW.getSeries('idx', 0), storm = await QW.getSeries('storm', 0);
+    const out = { t: now, values: prev?.values || null, historyDays: idx.length ? (now - idx[0][0]) / DAY : 0, candidates: [] };
+    const done = (status, note) => QW.setMeta('calibration', Object.assign(out, { status, note })).then(() => out);
+    if (out.historyDays < 14 || idx.length < 50)
+      return done('learning', `Needs 14+ days of index history to replay (has ${out.historyDays.toFixed(1)}).`);
+
+    const perDay = (await QW.baseRate(st)).perDay;
+    const start = new Date(idx[0][0]).toISOString().slice(0, 19);
+    const d = await getJSON(`https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&latitude=${QW.FL.lat}&longitude=${QW.FL.lon}&maxradiuskm=${st.radiusKm}&starttime=${start}&minmagnitude=${st.forecastMag}`);
+    const qt = d.features.map(f => f.properties.time).sort((a, b) => a - b);
+    let si = 0, stormNow = 0;
+
+    for (const k of QW.TUNE_GRID.anomalyThreshold) for (const days of QW.TUNE_GRID.forecastDays) {
+      const p = QW.chance(perDay, days);
+      let open = null, wasAbove = false, n = 0, hits = 0; si = 0; stormNow = 0;
+      for (const [t, v] of idx) {
+        while (si < storm.length && storm[si][0] <= t) stormNow = storm[si++][1];
+        const above = v >= k && !stormNow;
+        if (above && !wasAbove && !(open && t <= open.until)) {
+          open = { t, until: t + days * DAY };
+          if (open.until <= now) { n++; if (qt.some(q => q >= t && q <= open.until)) hits++; } // only score closed windows
+        }
+        wasAbove = above;
+      }
+      const z = n ? (hits - n * p) / Math.sqrt(n * p * (1 - p)) : null;
+      out.candidates.push({ anomalyThreshold: k, forecastDays: days, n, hits, expected: +(n * p).toFixed(2), z: z == null ? null : +z.toFixed(2) });
+    }
+    const ok = out.candidates.filter(c => c.n >= MIN_N).sort((a, b) => b.z - a.z);
+    const cur = prev?.values && out.candidates.find(c => c.anomalyThreshold === prev.values.anomalyThreshold && c.forecastDays === prev.values.forecastDays);
+    const best = ok[0];
+    if (!best) return done('learning', `No setting has ${MIN_N}+ replayable forecasts yet.`);
+    if (best.z < 3) { out.values = null; return done('chance', `Best replay is z ${best.z.toFixed(1)}: not clearly better than luck, so defaults stay.`); }
+    if (cur && cur.n >= MIN_N && cur.z >= best.z - 0.5) return done('tuned', `Keeping current settings (z ${cur.z.toFixed(1)}).`);
+    out.values = { anomalyThreshold: best.anomalyThreshold, forecastDays: best.forecastDays };
+    return done('tuned', `Threshold ${best.anomalyThreshold}, ${best.forecastDays}-day window: ${best.hits}/${best.n} hits vs ${best.expected} by luck (z ${best.z.toFixed(1)}).`);
+  };
+  // Phone side: adopt the cloud collector's calibration when it is newer than ours.
+  QW.syncCalibration = async function () {
+    const r = await fetch(QW.CALIBRATION_URL + '?t=' + Math.floor(Date.now() / 3e5), { cache: 'no-store' });
+    if (!r.ok) return null;
+    const c = await r.json(), mine = await QW.getMeta('calibration');
+    if (!mine || c.t > mine.t) await QW.setMeta('calibration', c);
+    return c;
+  };
+
   // ---------- Full collection cycle ----------
   QW.collect = async function ({ full = false } = {}) {
     const st = await QW.settings();
@@ -350,6 +420,7 @@
     const a = await QW.analyze();
     const alerts = [];
     if (a.index != null) await QW.putSamples('idx', [[a.t, a.index]]);
+    await QW.putSamples('storm', [[a.t, a.storm ? 1 : 0]]); // lets the self-tuner replay storm gating
 
     const firstRun = !(await QW.getMeta('initialized', false));
     await QW.setMeta('initialized', true);
@@ -364,7 +435,7 @@
     const issue = async (trigger, detail) => {
       if (open) return; // one forecast window at a time, so each one is scored independently
       const f = { t: Date.now(), until: Date.now() + st.forecastDays * DAY, mag: st.forecastMag, radiusKm: st.radiusKm,
-        trigger, detail, index: a.index, status: 'open' };
+        trigger, detail, index: a.index, threshold: st.anomalyThreshold, status: 'open' };
       try { f.baseChance = QW.chance((await QW.baseRate(st)).perDay, st.forecastDays); } catch {}
       f.id = await QW.addForecast(f); open = f;
       alerts.push({ kind: 'forecast', title: `Forecast: M${st.forecastMag}+ within ${QW.mi(st.radiusKm)} miles in ${st.forecastDays} days`,

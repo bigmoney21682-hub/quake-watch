@@ -21,12 +21,16 @@ Each local signal (telluric |E|, TEC anomaly, Z/H ratio) gets a robust z-score (
 
 ## Forecasts and scoring
 
-Two things open a **forecast window** (default: M2.5+ within 800 km in the next 7 days):
+Two things open a **forecast window** (default: M2.5+ within 500 miles in the next 7 days):
 
 1. The precursor index turns `elevated`, meaning the telluric, ionospheric and ULF signals have all moved off their baselines while space weather is quiet.
 2. A solar/seismic coincidence: solar input is rising (an M-class flare or larger in 24 h, F10.7 ≥ 20% above its 30-day median, or Kp ≥ 5) while quakes inside the radius run at ≥ 2× their 30-day rate.
 
 Each forecast sends a notification, is logged, and is scored automatically against USGS as a **hit** or **miss**. The Events tab compares the hit rate with the chance of a quake by luck alone, a Poisson estimate from the last 5 years of USGS counts (about 14% per 7-day window at the default settings). The method only earns trust if it beats that rate over many forecasts.
+
+## Self-tuning
+
+Once a day the cloud collector replays its stored precursor-index history (kept for 400 days) against real USGS quakes for every pair of threshold {2, 2.5, 3, 3.5, 4, 5} × window {3, 5, 7, 10, 14 days}. It scores each pair by skill over luck, z = (hits − expected) / √Σp(1−p). The best pair is adopted only if it has at least 8 replayed forecasts and z ≥ 3 (about p 0.05 after correcting for the 30 pairs tried). Otherwise the defaults stay. The result is committed as `calibration.json`, and the app picks it up when *Auto-tune from results* is on. Radius and forecast magnitude are never tuned, because widening them only makes hits easier by chance.
 
 ## Background alerts on iPhone (ntfy)
 

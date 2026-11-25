@@ -84,6 +84,8 @@
       </div>
       <div class="card">
         <h2>Forecasts</h2>
+        <label class="row"><span>Auto-tune from results</span><input type="checkbox" id="s-auto"></label>
+        <p class="small" id="cal-status"></p>
         <label class="row"><span>Forecast window (days)</span><input type="number" id="s-fdays" min="1" max="60" step="1"></label>
         <label class="row"><span>Forecast magnitude ≥</span><input type="number" id="s-fmag" min="1" max="8" step="0.1"></label>
         <p class="small">An elevated precursor index, or solar and seismic activity rising together, opens a forecast window. It's scored as a hit if a quake of this size lands inside the radius before the window closes. Otherwise it's a miss.</p>
